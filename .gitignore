@@ -1,0 +1,21 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Node / Frontend
+node_modules/
+dist/
+.env
+/frontend/.env
+
+# Databases
+*.db
+*.sqlite3
+
+# Local/IDE settings
+.vscode/
+.idea/
+
+
