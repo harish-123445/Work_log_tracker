@@ -16,7 +16,7 @@ class UserCreate(BaseModel):
 
 
 class UserOut(BaseModel):
-    id: int
+    id: str
     username: str
     email: EmailStr
     full_name: Optional[str] = None
@@ -70,8 +70,8 @@ class ProjectUpdate(BaseModel):
 
 
 class ProjectOut(ProjectBase):
-    id: int
-    owner_id: int
+    id: str
+    owner_id: str
     created_at: datetime
     updated_at: datetime
 

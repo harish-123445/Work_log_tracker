@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
 
-from app import models, auth, reports
+from app import schemas, auth, reports
 from app.database import get_db
 from app.routers.projects import _get_owned_project
 
@@ -15,11 +14,13 @@ def _slug(text: str) -> str:
 
 @router.get("/project/{project_id}/pdf")
 def export_project_pdf(
-    project_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    project_id: str,
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
-    project = _get_owned_project(db, project_id, current_user)
+    project_dict = _get_owned_project(db, project_id, current_user)
+    project = schemas.ProjectOut(**project_dict)
+    
     buf = reports.build_project_pdf(project)
     filename = f"{_slug(project.project_title)}.pdf"
     return StreamingResponse(
@@ -31,11 +32,13 @@ def export_project_pdf(
 
 @router.get("/project/{project_id}/docx")
 def export_project_docx(
-    project_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    project_id: str,
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
-    project = _get_owned_project(db, project_id, current_user)
+    project_dict = _get_owned_project(db, project_id, current_user)
+    project = schemas.ProjectOut(**project_dict)
+    
     buf = reports.build_project_docx(project)
     filename = f"{_slug(project.project_title)}.docx"
     return StreamingResponse(
@@ -47,17 +50,27 @@ def export_project_docx(
 
 @router.get("/all/pdf")
 def export_all_pdf(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
-    projects = (
-        db.query(models.Project)
-        .filter(models.Project.owner_id == current_user.id)
-        .order_by(models.Project.company_name, models.Project.start_date.desc().nullslast())
-        .all()
-    )
-    if not projects:
+    projects_dict = db.child("projects").order_by_child("owner_id").equal_to(current_user.id).get()
+    if not projects_dict:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No projects to export")
+
+    projects = []
+    for pid, pdata in projects_dict.items():
+        pdata["id"] = pid
+        projects.append(schemas.ProjectOut(**pdata))
+
+    # Sort by company_name ASC, start_date DESC
+    def sort_key(p):
+        sd = p.start_date.isoformat() if p.start_date else ""
+        return (p.company_name, sd)
+
+    projects.sort(key=sort_key, reverse=True) # This reverses both, not ideal for company.
+    # To correctly sort company ASC and date DESC:
+    projects.sort(key=lambda p: p.start_date.isoformat() if p.start_date else "", reverse=True)
+    projects.sort(key=lambda p: p.company_name)
 
     buf = reports.build_full_pdf(current_user, projects)
     return StreamingResponse(
@@ -69,17 +82,20 @@ def export_all_pdf(
 
 @router.get("/all/docx")
 def export_all_docx(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
-    projects = (
-        db.query(models.Project)
-        .filter(models.Project.owner_id == current_user.id)
-        .order_by(models.Project.company_name, models.Project.start_date.desc().nullslast())
-        .all()
-    )
-    if not projects:
+    projects_dict = db.child("projects").order_by_child("owner_id").equal_to(current_user.id).get()
+    if not projects_dict:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No projects to export")
+
+    projects = []
+    for pid, pdata in projects_dict.items():
+        pdata["id"] = pid
+        projects.append(schemas.ProjectOut(**pdata))
+
+    projects.sort(key=lambda p: p.start_date.isoformat() if p.start_date else "", reverse=True)
+    projects.sort(key=lambda p: p.company_name)
 
     buf = reports.build_full_docx(current_user, projects)
     return StreamingResponse(

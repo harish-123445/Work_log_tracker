@@ -1,24 +1,21 @@
+import uuid
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 
-from app import models, schemas, auth
+from app import schemas, auth
 from app.database import get_db
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-def _get_owned_project(db: Session, project_id: int, user: models.User) -> models.Project:
-    project = (
-        db.query(models.Project)
-        .filter(models.Project.id == project_id, models.Project.owner_id == user.id)
-        .first()
-    )
-    if not project:
+def _get_owned_project(db, project_id: str, user: schemas.UserOut) -> dict:
+    project_data = db.child("projects").child(project_id).get()
+    if not project_data or project_data.get("owner_id") != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return project
+    project_data["id"] = project_id
+    return project_data
 
 
 @router.get("", response_model=list[schemas.ProjectOut])
@@ -26,60 +23,76 @@ def list_projects(
     company: Optional[str] = None,
     status_filter: Optional[str] = None,
     search: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
-    query = db.query(models.Project).filter(models.Project.owner_id == current_user.id)
-
+    projects_dict = db.child("projects").order_by_child("owner_id").equal_to(current_user.id).get()
+    
+    if not projects_dict:
+        return []
+        
+    projects = []
+    for pid, pdata in projects_dict.items():
+        pdata["id"] = pid
+        projects.append(pdata)
+        
     if company:
-        query = query.filter(models.Project.company_name == company)
+        projects = [p for p in projects if p.get("company_name") == company]
     if status_filter:
-        query = query.filter(models.Project.status == status_filter)
+        projects = [p for p in projects if p.get("status") == status_filter]
     if search:
-        like = f"%{search}%"
-        query = query.filter(
-            models.Project.project_title.ilike(like)
-            | models.Project.description.ilike(like)
-        )
-
-    return query.order_by(models.Project.start_date.desc().nullslast()).all()
+        s = search.lower()
+        projects = [
+            p for p in projects 
+            if s in str(p.get("project_title", "")).lower() or s in str(p.get("description", "")).lower()
+        ]
+        
+    def sort_key(p):
+        sd = p.get("start_date")
+        return sd if sd is not None else ""
+        
+    projects.sort(key=sort_key, reverse=True)
+    return projects
 
 
 @router.get("/companies", response_model=list[str])
 def list_companies(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
-    rows = (
-        db.query(models.Project.company_name)
-        .filter(models.Project.owner_id == current_user.id)
-        .distinct()
-        .all()
-    )
-    return [r[0] for r in rows]
+    projects_dict = db.child("projects").order_by_child("owner_id").equal_to(current_user.id).get()
+    if not projects_dict:
+        return []
+    
+    companies = set()
+    for pdata in projects_dict.values():
+        cname = pdata.get("company_name")
+        if cname:
+            companies.add(cname)
+            
+    return list(companies)
 
 
 @router.get("/stats")
 def project_stats(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
-    base = db.query(models.Project).filter(models.Project.owner_id == current_user.id)
-
-    total = base.count()
-    by_status = dict(
-        db.query(models.Project.status, func.count(models.Project.id))
-        .filter(models.Project.owner_id == current_user.id)
-        .group_by(models.Project.status)
-        .all()
-    )
-    by_company = dict(
-        db.query(models.Project.company_name, func.count(models.Project.id))
-        .filter(models.Project.owner_id == current_user.id)
-        .group_by(models.Project.company_name)
-        .all()
-    )
-
+    projects_dict = db.child("projects").order_by_child("owner_id").equal_to(current_user.id).get()
+    if not projects_dict:
+        return {"total_projects": 0, "by_status": {}, "by_company": {}}
+        
+    total = len(projects_dict)
+    by_status = {}
+    by_company = {}
+    
+    for pdata in projects_dict.values():
+        st = pdata.get("status", "Unknown")
+        comp = pdata.get("company_name", "Unknown")
+        
+        by_status[st] = by_status.get(st, 0) + 1
+        by_company[comp] = by_company.get(comp, 0) + 1
+        
     return {
         "total_projects": total,
         "by_status": by_status,
@@ -90,47 +103,66 @@ def project_stats(
 @router.post("", response_model=schemas.ProjectOut, status_code=status.HTTP_201_CREATED)
 def create_project(
     project_in: schemas.ProjectCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
-    project = models.Project(**project_in.model_dump(), owner_id=current_user.id)
-    db.add(project)
-    db.commit()
-    db.refresh(project)
-    return project
+    project_id = uuid.uuid4().hex
+    now = datetime.utcnow().isoformat()
+    
+    project_data = project_in.model_dump()
+    for k, v in project_data.items():
+        if hasattr(v, 'isoformat'):
+            project_data[k] = v.isoformat()
+            
+    project_data["owner_id"] = current_user.id
+    project_data["created_at"] = now
+    project_data["updated_at"] = now
+    
+    db.child("projects").child(project_id).set(project_data)
+    
+    project_data["id"] = project_id
+    return project_data
 
 
 @router.get("/{project_id}", response_model=schemas.ProjectOut)
 def get_project(
-    project_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    project_id: str,
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
     return _get_owned_project(db, project_id, current_user)
 
 
 @router.put("/{project_id}", response_model=schemas.ProjectOut)
 def update_project(
-    project_id: int,
+    project_id: str,
     project_in: schemas.ProjectUpdate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
-    project = _get_owned_project(db, project_id, current_user)
-    for field, value in project_in.model_dump(exclude_unset=True).items():
-        setattr(project, field, value)
-    db.commit()
-    db.refresh(project)
-    return project
+    project_data = _get_owned_project(db, project_id, current_user)
+    
+    update_data = project_in.model_dump(exclude_unset=True)
+    for k, v in update_data.items():
+        if hasattr(v, 'isoformat'):
+            update_data[k] = v.isoformat()
+            
+    now = datetime.utcnow().isoformat()
+    update_data["updated_at"] = now
+    
+    db.child("projects").child(project_id).update(update_data)
+    
+    project_data.update(update_data)
+    return project_data
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_project(
-    project_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user),
+    project_id: str,
+    db = Depends(get_db),
+    current_user: schemas.UserOut = Depends(auth.get_current_user),
 ):
-    project = _get_owned_project(db, project_id, current_user)
-    db.delete(project)
-    db.commit()
+    _get_owned_project(db, project_id, current_user)
+    db.child("projects").child(project_id).delete()
     return None
+

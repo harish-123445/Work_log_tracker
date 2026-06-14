@@ -20,14 +20,14 @@ from reportlab.platypus import (
     HRFlowable,
 )
 
-from app import models
+from app import schemas
 
 
 def _fmt_date(d):
     return d.strftime("%b %Y") if d else "Present" if d is None else ""
 
 
-def _date_range(project: "models.Project") -> str:
+def _date_range(project: "schemas.Project") -> str:
     start = project.start_date.strftime("%b %Y") if project.start_date else "—"
     if project.status == "Ongoing" and not project.end_date:
         end = "Present"
@@ -40,7 +40,7 @@ def _date_range(project: "models.Project") -> str:
 # DOCX
 # ---------------------------------------------------------------------------
 
-def _add_project_to_doc(doc: Document, project: "models.Project"):
+def _add_project_to_doc(doc: Document, project: "schemas.Project"):
     heading = doc.add_heading(level=2)
     run = heading.add_run(project.project_title)
     run.font.color.rgb = RGBColor(0x1F, 0x3A, 0x3D)
@@ -88,7 +88,7 @@ def _add_project_to_doc(doc: Document, project: "models.Project"):
     doc.add_paragraph()  # spacer
 
 
-def build_project_docx(project: "models.Project") -> io.BytesIO:
+def build_project_docx(project: "schemas.Project") -> io.BytesIO:
     doc = Document()
     _add_project_to_doc(doc, project)
 
@@ -98,7 +98,7 @@ def build_project_docx(project: "models.Project") -> io.BytesIO:
     return buf
 
 
-def build_full_docx(user: "models.User", projects: list["models.Project"]) -> io.BytesIO:
+def build_full_docx(user: "schemas.UserOut", projects: list["schemas.Project"]) -> io.BytesIO:
     doc = Document()
 
     title = doc.add_heading(level=0)
@@ -150,7 +150,7 @@ def _pdf_styles():
     return styles
 
 
-def _project_flowables(project: "models.Project", styles) -> list:
+def _project_flowables(project: "schemas.Project", styles) -> list:
     flow = []
     flow.append(Paragraph(project.project_title, styles["ProjectHeading"]))
 
@@ -197,7 +197,7 @@ def _project_flowables(project: "models.Project", styles) -> list:
     return flow
 
 
-def build_project_pdf(project: "models.Project") -> io.BytesIO:
+def build_project_pdf(project: "schemas.Project") -> io.BytesIO:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=2 * cm, bottomMargin=2 * cm)
     styles = _pdf_styles()
@@ -210,7 +210,7 @@ def build_project_pdf(project: "models.Project") -> io.BytesIO:
     return buf
 
 
-def build_full_pdf(user: "models.User", projects: list["models.Project"]) -> io.BytesIO:
+def build_full_pdf(user: "schemas.UserOut", projects: list["schemas.Project"]) -> io.BytesIO:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=2 * cm, bottomMargin=2 * cm)
     styles = _pdf_styles()

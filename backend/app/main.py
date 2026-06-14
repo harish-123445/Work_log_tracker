@@ -1,14 +1,17 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.database import Base, engine
+# Removed SQLAlchemy engine import
 from app.routers import auth as auth_router
 from app.routers import projects as projects_router
 from app.routers import export as export_router
 
-Base.metadata.create_all(bind=engine)
+# No longer using Base.metadata.create_all() for Firebase
 
 app = FastAPI(title="WorkLog API", version="1.0.0")
 
